@@ -1,0 +1,64 @@
+import os
+import boto3
+from datetime import datetime, timedelta
+import tableauserverclient as TSC
+
+# AWS S3 setup
+s3_client = boto3.client('s3')
+s3_bucket_name = 'your-s3-bucket-name'
+
+# Tableau Server setup
+TABLEAU_SERVER_URL = 'https://your-tableau-server'
+USERNAME = 'your-username'
+PASSWORD = 'your-password'
+SITE_ID = ''  # Use '' for the default site
+
+# Threshold for archiving dashboards (120 days)
+ARCHIVE_THRESHOLD_DAYS = 120
+
+def authenticate_tableau():
+    """Authenticate and return a Tableau server connection."""
+    tableau_auth = TSC.TableauAuth(USERNAME, PASSWORD, site_id=SITE_ID)
+    server = TSC.Server(TABLEAU_SERVER_URL, use_server_version=True)
+    server.auth.sign_in(tableau_auth)
+    return server
+
+def fetch_old_workbooks(server):
+    """Fetch workbooks that haven't been refreshed in the last ARCHIVE_THRESHOLD_DAYS."""
+    old_workbooks = []
+    request_options = TSC.RequestOptions(pagenumber=1)
+    
+    for workbook in TSC.Pager(server.workbooks, request_options):
+        if workbook.updated_at < datetime.now() - timedelta(days=ARCHIVE_THRESHOLD_DAYS):
+            old_workbooks.append(workbook)
+    
+    return old_workbooks
+
+def archive_workbook_to_s3(server, workbook):
+    """Download workbook from Tableau and upload it to S3."""
+    file_path = f'/tmp/{workbook.name}.twb'
+    server.workbooks.download(workbook.id, filepath=file_path, no_extract=False)
+    
+    s3_key = f'archive/{workbook.name}.twb'
+    s3_client.upload_file(file_path, s3_bucket_name, s3_key)
+    
+    os.remove(file_path)
+
+def delete_workbook_from_tableau(server, workbook):
+    """Delete a workbook from Tableau."""
+    server.workbooks.delete(workbook.id)
+
+def main():
+    """Main function to handle the archival and deletion of old Tableau dashboards."""
+    server = authenticate_tableau()
+    old_workbooks = fetch_old_workbooks(server)
+
+    for workbook in old_workbooks:
+        print(f"Archiving and deleting workbook: {workbook.name}")
+        archive_workbook_to_s3(server, workbook)
+        delete_workbook_from_tableau(server, workbook)
+
+    server.auth.sign_out()
+
+if __name__ == "__main__":
+    main()
