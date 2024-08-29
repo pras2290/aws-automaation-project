@@ -1,1 +1,1 @@
-# aws-automaation-project
+# aws-automation-project
